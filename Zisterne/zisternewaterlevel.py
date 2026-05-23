@@ -29,7 +29,7 @@ GPIO.output(Triggerpin, False)
 
 # ---------------- Zisterne ----------------
 ZISTERNE_DURCHMESSER = 2.5
-ZISTERNE_MAX_WATER_HIGHT = 2
+ZISTERNE_MAX_WATER_HIGHT = 2.3
 ZISTERNE_SENSOR_HIGHT = 2.64
 
 # ---------------- CONFIG ----------------
