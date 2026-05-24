@@ -36,7 +36,8 @@ void startdeepsleeptimer(int surface) {
   // Calculate the time until the next full minute
   static unsigned long currentTime = millis();
 
-  if(millis() - currentTime > 10000) {
+  if(millis() - currentTime > 10000) 
+  {
 
     bool state = digitalRead(INT_PIN); // The following lines will make the ESP go out of a deep sleep on toggle
 
@@ -48,12 +49,12 @@ void startdeepsleeptimer(int surface) {
     {
       esp_deep_sleep_enable_gpio_wakeup(BIT(INT_PIN),ESP_GPIO_WAKEUP_GPIO_HIGH);
     }
-    currentTime = millis();
+    
     if(surface != 0)
       {
         sendmqtt(surface, "Ruhig");
       }
-    
+    writeRegister(0x6B, 0x40);
     esp_deep_sleep_start();
   }
   
