@@ -10,7 +10,6 @@
 RTC_DATA_ATTR char* ssid = SECRET_SSID;
 RTC_DATA_ATTR char* password = SECRET_PASSWORD;
 
-
 const char* MQTT_Adress = SECRET_MQTT_ADRESS;
 const int MQTT_Port = SECRET_MQTT_PORT;
 
@@ -24,6 +23,9 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 unsigned long startTime = 0;
+unsigned long lastActivityTime = 0;
+int lastSentSurface = -1;
+String lastSentShake = "";
 
 void sendmqtt(int surface, String shaking);
 void getdata();
@@ -33,13 +35,9 @@ void writeRegister(uint8_t reg, uint8_t value);
 void getavailablewifi();
  
 void startdeepsleeptimer(int surface) {
-  // Calculate the time until the next full minute
-  static unsigned long currentTime = millis();
-
-  if(millis() - currentTime > 10000) 
+  if(millis() - lastActivityTime > 10000) 
   {
-
-    bool state = digitalRead(INT_PIN); // The following lines will make the ESP go out of a deep sleep on toggle
+    bool state = digitalRead(INT_PIN);
 
     if(state == HIGH) 
     {
@@ -51,15 +49,15 @@ void startdeepsleeptimer(int surface) {
     }
     
     if(surface != 0)
-      {
-        sendmqtt(surface, "Ruhig");
-      }
+    {
+      sendmqtt(surface, "Ruhig");
+    }
     writeRegister(0x6B, 0x40);
+    
+    client.disconnect();
+    WiFi.disconnect(true);
     esp_deep_sleep_start();
   }
-  
-
-
 }
 
 void setup() {
@@ -67,56 +65,69 @@ void setup() {
   startTime = millis();
   pinMode(INT_PIN, INPUT_PULLUP);
   Wire.begin();
-  writeRegister(0x6B, 0x00); // Wake up MPU6050
+  writeRegister(0x6B, 0x00);
   WiFi.begin(ssid, password);
   getavailablewifi();
-    Serial.println("Connected to WiFi");
+  Serial.println("Connected to WiFi");
   client.setServer(MQTT_Adress, MQTT_Port);
-  
+  lastActivityTime = millis();
 }
 
 void loop() {
+  if (!client.connected()) {
+    while (!client.connect("ESP32Client", mqttusername, mqttpassword)) {
+      delay(500);
+    }
+  }
+  client.loop();
+
   static unsigned long lastsurfaceTime = 0;
-  static unsigned long lastshakeTime = 0;
   static int surface;
   bool lastshake = false;
   
-  //getdata();
   bool isshaked = getshake();
   if(isshaked != lastshake) 
+  {
+    if(isshaked) 
     {
-      if(isshaked) 
-        {
-          sendmqtt(surface, "Geschüttelt");
-        }
-      else 
-        {
-          sendmqtt(surface, "Ruhig");
-        }
+      sendmqtt(surface, "Geschüttelt");
+      lastSentShake = "Geschüttelt";
     }
+    else 
+    {
+      sendmqtt(surface, "Ruhig");
+      lastSentShake = "Ruhig";
+    }
+    lastActivityTime = millis();
+  }
   lastshake = isshaked;
 
   if(millis() - lastsurfaceTime > 1000) 
   {
     if(isshaked == false)
     {
-      surface = getsurface();
+      int current_surface = getsurface();
       lastsurfaceTime = millis();
     
-      if(isshaked == false)
-      {
-        sendmqtt(surface, "Ruhig");
-      }
-      else 
-      {
-        sendmqtt(surface, "Geschüttelt");
+      if (current_surface != lastSentSurface) {
+        surface = current_surface;
+        lastSentSurface = surface;
+        lastActivityTime = millis();
+        
+        if(isshaked == false)
+        {
+          sendmqtt(surface, "Ruhig");
+        }
+        else 
+        {
+          sendmqtt(surface, "Geschüttelt");
+        }
       }
     }
   }
   
   startdeepsleeptimer(surface);
-
-  }
+}
 
 void sendmqtt(int surface, String shaking) {
   if (!client.connected()) {
@@ -124,20 +135,15 @@ void sendmqtt(int surface, String shaking) {
       delay(500);
     }
   }
-  
   client.publish(MQTT_Surface, String(surface).c_str());
   client.publish(MQTT_Shaking, shaking.c_str());
-
 }
 
 void getdata() {
-  // Read 14 bytes starting at 0x3B (Accel, Temp, Gyro)
   Wire.beginTransmission(MPU6050_ADDR);
   Wire.write(0x3B);
   Wire.endTransmission(false);
   Wire.requestFrom(MPU6050_ADDR, 14, true);
-
-  
 
   int16_t AcX = Wire.read() << 8 | Wire.read();
   int16_t AcY = Wire.read() << 8 | Wire.read();
@@ -150,12 +156,9 @@ void getdata() {
   Serial.println("Accel: " + String(AcX) + ", " + String(AcY) + ", " + String(AcZ));
   Serial.println("Gyro: " + String(GyX) + ", " + String(GyY) + ", " + String(GyZ));
   Serial.println();
-  
-
 }
 
 int getsurface() {
-   
   Wire.beginTransmission(MPU6050_ADDR);
   Wire.write(0x3B);
   Wire.endTransmission(false);
@@ -166,24 +169,21 @@ int getsurface() {
   int16_t AcZ = Wire.read() << 8 | Wire.read();
 
   if (AcZ > 15000) {
-    return 1; // Surface up
+    return 1;
   } else if (AcZ < -15000) {
-    return 6; // Surface down
+    return 6;
   } else if (AcX > 15000) {
-    return 2; // Surface right
+    return 2;
   } else if (AcX < -15000) {
-    return 5; // Surface left
+    return 5;
   } else if (AcY > 15000) {
-    return 3; // Surface front
+    return 3;
   } else if (AcY < -15000) {
-    return 4; // Surface back
+    return 4;
   } else {
-    return 1; // No significant orientation
-    
+    return 1;
   }
-
 }
-
 
 void writeRegister(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(MPU6050_ADDR);
@@ -213,88 +213,68 @@ bool getshake() {
   static int angle = 10000;
 
   if(millis() - lastreadvalues > 500 || shaked == true) 
-    {
-      lastAcX = AcX;
-      lastAcY = AcY;
-      lastAcZ = AcZ;
-      lastreadvalues = millis();
-    }
+  {
+    lastAcX = AcX;
+    lastAcY = AcY;
+    lastAcZ = AcZ;
+    lastreadvalues = millis();
+  }
 
   int oldamplitude = sqrt(sq(lastAcX) + sq(lastAcY) + sq(lastAcZ));
   int amplitude = sqrt(sq(AcX) + sq(AcY) + sq(AcZ));
    
-
-  /*
-  Serial.print(">");
-  Serial.print("amplitude:");
-  Serial.print(amplitude);
-  Serial.print(",");
-
-  Serial.print("oldamplitude:");
-  Serial.print(oldamplitude);
-  Serial.print(",");
-
-  Serial.print("border");
-  Serial.print(1000000);
-  Serial.println(" ");
-  */
-
-  
-
-
   if(amplitude < 20000) 
   {
-   lastshakeTime = millis();
-   delay(100);
+    lastshakeTime = millis();
+    delay(100);
   }
 
   if(millis() - lastshakeTime > 200) 
-    {
-      shaked = true;
-    }
+  {
+    shaked = true;
+  }
   else 
-    {
-      shaked = false;
-    }
+  {
+    shaked = false;
+  }
   return shaked;
 }
 
 void getavailablewifi() {
   const unsigned long wifistarttime = millis();
-   int counter = 0;
+  int counter = 0;
   while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    if(millis() - wifistarttime > 10000) 
     {
-      delay(500);
-      if(millis() - wifistarttime > 10000) 
-        {
-          if(counter == 0) 
-            {
-              WiFi.begin(SECRET_SSID, SECRET_PASSWORD);
-              ssid = SECRET_SSID;
-              password = SECRET_PASSWORD;
-              counter++;
-            }
-          else if(counter == 1) 
-            {
-              WiFi.begin(SECRET_SSID1, SECRET_PASSWORD1);
-              ssid = SECRET_SSID1;
-              password = SECRET_PASSWORD1;
-              counter++;
-            }
-          else if (counter == 2)
-          {
-            WiFi.begin(SECRET_SSID2, SECRET_PASSWORD2);
-            ssid = SECRET_SSID2;
-            password = SECRET_PASSWORD2;
-            counter++;
-          }
-          
-          else 
-            {
-              Serial.println("Could not connect to WiFi");
-              startdeepsleeptimer(0);
-              break;
-            }
-        }
-    } 
+      if(counter == 0) 
+      {
+        WiFi.begin(SECRET_SSID, SECRET_PASSWORD);
+        ssid = SECRET_SSID;
+        password = SECRET_PASSWORD;
+        counter++;
+      }
+      else if(counter == 1) 
+      {
+        WiFi.begin(SECRET_SSID1, SECRET_PASSWORD1);
+        ssid = SECRET_SSID1;
+        password = SECRET_PASSWORD1;
+        counter++;
+      }
+      else if (counter == 2)
+      {
+        WiFi.begin(SECRET_SSID2, SECRET_PASSWORD2);
+        ssid = SECRET_SSID2;
+        password = SECRET_PASSWORD2;
+        counter++;
+      }
+      else 
+      {
+        Serial.println("Could not connect to WiFi");
+        startdeepsleeptimer(0);
+        break;
+      }
+    }
+  } 
 }
